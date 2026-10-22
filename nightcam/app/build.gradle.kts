@@ -12,8 +12,8 @@ android {
         // Pixel 3 XL dừng ở Android 12 (API 31). Không được nâng minSdk quá 31.
         minSdk = 29
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.9.1"
+        versionCode = 4
+        versionName = "0.10.0"
     }
 
     signingConfigs {
@@ -58,6 +58,14 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.constraintlayout:constraintlayout:2.2.0")
     implementation("androidx.preference:preference:1.2.1")
+
+    // CameraX: lõi ghi hình giống XSCamera (đã chạy được trên máy thật), xem docs/XSCAMERA_DECOMPILE.md.
+    val camerax = "1.4.2"
+    implementation("androidx.camera:camera-core:$camerax")
+    implementation("androidx.camera:camera-camera2:$camerax")
+    implementation("androidx.camera:camera-lifecycle:$camerax")
+    implementation("androidx.camera:camera-video:$camerax")
+    implementation("androidx.camera:camera-view:$camerax")
     implementation("androidx.lifecycle:lifecycle-service:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")

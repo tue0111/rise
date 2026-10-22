@@ -8,7 +8,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
-import android.graphics.SurfaceTexture
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -18,8 +17,6 @@ import android.os.PowerManager
 import android.net.Uri
 import android.provider.Settings
 import android.view.MotionEvent
-import android.view.Surface
-import android.view.TextureView
 import android.widget.SeekBar
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -40,7 +37,6 @@ import android.os.Environment
 import com.google.android.material.chip.Chip
 import android.view.View
 import android.view.ViewConfiguration
-import com.tue.nightcam.preview.PreviewTransform
 import com.tue.nightcam.probe.CapabilityProbe
 import com.tue.nightcam.probe.toJson
 import com.tue.nightcam.record.RecState
@@ -61,8 +57,6 @@ class MainActivity : AppCompatActivity() {
     private var bound = false
     private var stateJob: Job? = null
     private var lastState = RecState()
-    private var previewSurface: Surface? = null
-    private var sensorOrientation = 90
 
     companion object {
         private const val KEY_ASKED_BATTERY = "asked_battery_exemption"
@@ -139,41 +133,18 @@ class MainActivity : AppCompatActivity() {
             override fun onStartTrackingTouch(seek: SeekBar) {}
             override fun onStopTrackingTouch(seek: SeekBar) {}
         })
-        binding.previewView.setOnTouchListener { view, event ->
+        binding.previewView.setOnTouchListener { _, event ->
             if (event.action == MotionEvent.ACTION_UP) {
-                service?.tapFocus(event.x / view.width, event.y / view.height)
+                service?.tapFocus(binding.previewView.meteringPointFactory.createPoint(event.x, event.y))
             }
             true
         }
-        binding.previewView.surfaceTextureListener = previewListener
         render(RecState())
         if (savedInstanceState == null) {
             recoverLeftovers()
             val missing = requiredPermissions().filter { !isGranted(it) }
             if (missing.isNotEmpty()) startupPermissionLauncher.launch(missing.toTypedArray())
         }
-    }
-
-    private val previewListener = object : TextureView.SurfaceTextureListener {
-        override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
-            texture.setDefaultBufferSize(PreviewTransform.BUFFER_WIDTH, PreviewTransform.BUFFER_HEIGHT)
-            previewSurface = Surface(texture)
-            applyPreviewTransform()
-            attachPreviewIfReady()
-        }
-
-        override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) {
-            applyPreviewTransform()
-        }
-
-        override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
-            service?.detachPreview()
-            previewSurface?.release()
-            previewSurface = null
-            return true
-        }
-
-        override fun onSurfaceTextureUpdated(texture: SurfaceTexture) {}
     }
 
     /** Phục hồi file dở dang của lần chạy trước (app bị chết giữa chừng). */
@@ -292,12 +263,7 @@ class MainActivity : AppCompatActivity() {
     private fun attachPreviewIfReady() {
         if (!cameraGranted()) return
         val svc = service ?: return
-        val surface = previewSurface ?: return
-        svc.attachPreview(surface)
-    }
-
-    private fun applyPreviewTransform() {
-        PreviewTransform.apply(binding.previewView, sensorOrientation)
+        svc.attachPreview(binding.previewView.surfaceProvider)
     }
 
     private fun onRecordClicked() {
@@ -433,7 +399,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun buildInfoText(): String {
         val caps = CapabilityProbe.probe(this) ?: return "Không tìm thấy camera sau."
-        sensorOrientation = caps.sensorOrientation
         val result = ConfigValidator.validate(Presets.NIGHT_FIXED.config, caps)
         return buildString {
             appendLine("Preset: ${Presets.NIGHT_FIXED.label}")

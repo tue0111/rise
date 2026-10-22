@@ -5,61 +5,17 @@ import android.content.ContentUris
 import android.content.ContentValues
 import android.media.MediaMetadataRetriever
 import android.net.Uri
-import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import com.tue.nightcam.core.Segments
 
 /**
- * Tạo, hoàn tất và phục hồi file video trong MediaStore. File đang ghi ở trạng thái IS_PENDING
- * nên thư viện không thấy file dở dang. Khi hoàn tất file mới được công bố.
+ * Phục hồi file video trong MediaStore. CameraX ghi file ở trạng thái IS_PENDING và chỉ công bố
+ * khi hoàn tất; nếu app chết giữa chừng, file còn pending được xử lý ở lần mở sau.
  */
 class SegmentStore(private val resolver: ContentResolver) {
 
-    data class Segment(val uri: Uri, val pfd: ParcelFileDescriptor, val name: String)
-
     data class RecoveryResult(val published: Int, val removed: Int, val broken: Int) {
         val total: Int get() = published + removed + broken
-    }
-
-    fun create(stamp: String, index: Int): Segment {
-        val name = Segments.fileName(stamp, index)
-        val values = ContentValues().apply {
-            put(MediaStore.Video.Media.DISPLAY_NAME, name)
-            put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-            put(MediaStore.Video.Media.RELATIVE_PATH, RELATIVE_PATH)
-            put(MediaStore.Video.Media.IS_PENDING, 1)
-        }
-        val uri = resolver.insert(COLLECTION, values) ?: error("MediaStore không tạo được $name")
-        val pfd = try {
-            resolver.openFileDescriptor(uri, "rw")
-        } catch (e: Exception) {
-            resolver.delete(uri, null, null)
-            throw e
-        }
-        if (pfd == null) {
-            resolver.delete(uri, null, null)
-            error("Không mở được $name để ghi")
-        }
-        return Segment(uri, pfd, name)
-    }
-
-    /**
-     * Đóng segment. File rỗng bị xóa. File có dữ liệu được công bố (IS_PENDING = 0).
-     * Kích thước đọc lại từ MediaStore vì statSize của pfd có thể là -1.
-     */
-    fun finalize(segment: Segment) {
-        try {
-            segment.pfd.close()
-        } catch (_: Exception) {
-            // đã đóng hoặc lỗi I/O: vẫn kiểm tra kích thước bên dưới
-        }
-        val size = resolver.query(segment.uri, arrayOf(MediaStore.MediaColumns.SIZE), null, null, null)
-            ?.use { c -> if (c.moveToFirst()) c.getLong(0) else -1L } ?: -1L
-        if (size == 0L) {
-            resolver.delete(segment.uri, null, null)
-            return
-        }
-        publish(segment.uri)
     }
 
     /**

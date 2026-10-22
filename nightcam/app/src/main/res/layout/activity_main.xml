@@ -9,11 +9,13 @@
     android:orientation="vertical"
     android:padding="12dp">
 
-    <TextureView
+    <androidx.camera.view.PreviewView
         android:id="@+id/previewView"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1" />
+        android:layout_weight="1"
+        app:implementationMode="compatible"
+        app:scaleType="fitCenter" />
 
     <LinearLayout
         android:id="@+id/controlsPanel"

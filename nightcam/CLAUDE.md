@@ -1,7 +1,8 @@
 # NightCam: hướng dẫn cho agent lập trình
 
 App Android quay video dài khi tắt màn hình, tối ưu quay đêm, cho **Google Pixel 3 XL (Android 12, API 31)**.
-Kotlin, Views + ViewBinding, Camera2 + MediaRecorder. Không dùng CameraX, Compose hay DI framework.
+Kotlin, Views + ViewBinding, CameraX (camera-video, camera-view) với Camera2Interop cho điều khiển ảnh. Không dùng Compose hay DI framework.
+Từ bản 0.10.0 lõi ghi hình là CameraX (xem PLAN mục 3.1); CAMERA2_NOTES chỉ còn giá trị tham khảo cho các key CaptureRequest.
 
 ## Đọc trước khi làm (theo thứ tự)
 1. `docs/PLAN.md`: mục tiêu và các quyết định đã chốt. Không bàn lại các quyết định này.

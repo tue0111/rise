@@ -40,7 +40,15 @@ Các thông số dưới là **dự kiến**. App phải tự đọc lại lúc 
 
 ## 3. Quyết định kỹ thuật chính
 
-### 3.1 Camera2 + MediaRecorder, không dùng CameraX
+### 3.1 Lõi ghi hình
+
+> **Cập nhật (bản 0.10.0):** bản Camera2 + MediaRecorder không ghi được video trên Pixel 3 XL của người dùng.
+> Lõi ghi hình đã chuyển sang **CameraX** (Preview khi chờ, VideoCapture khi quay, bind vào lifecycle của service),
+> giống XSCamera (xem `docs/XSCAMERA_DECOMPILE.md`). Các điều khiển ảnh (dải FPS, khóa nét, NR, chống nhấp nháy,
+> khóa AE/AWB) vẫn đi qua Camera2Interop. Đổi lại: chỉ ghi H.264, và chia đoạn bằng giới hạn thời lượng
+> của CameraX (có khoảng ngắt rất ngắn giữa hai đoạn). Bảng dưới là phân tích ban đầu, giữ lại để tham khảo.
+
+#### Phân tích ban đầu: Camera2 + MediaRecorder
 
 | Tiêu chí | CameraX 1.4 (ổn định) | **Camera2 + MediaRecorder** |
 |---|---|---|
