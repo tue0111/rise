@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string-array name="resolution_entries">
+        <item>4K (2160p)</item>
+        <item>Full HD (1080p)</item>
+        <item>HD (720p)</item>
+    </string-array>
+    <string-array name="resolution_values">
+        <item>2160p</item>
+        <item>1080p</item>
+        <item>720p</item>
+    </string-array>
+    <string-array name="codec_entries">
+        <item>HEVC (H.265): file nhỏ hơn</item>
+        <item>AVC (H.264): tương thích rộng hơn</item>
+    </string-array>
+    <string-array name="codec_values">
+        <item>hevc</item>
+        <item>avc</item>
+    </string-array>
+    <string-array name="profile_entries">
+        <item>Đêm: FPS linh hoạt để sáng hơn</item>
+        <item>Ban ngày: 30 fps cố định</item>
+    </string-array>
+    <string-array name="profile_values">
+        <item>night</item>
+        <item>standard</item>
+    </string-array>
+    <string-array name="nr_entries">
+        <item>Nhanh (mặc định)</item>
+        <item>Chất lượng cao (chậm hơn)</item>
+    </string-array>
+    <string-array name="nr_values">
+        <item>fast</item>
+        <item>hq</item>
+    </string-array>
+    <string-array name="orientation_entries">
+        <item>Tự động theo màn hình</item>
+        <item>Luôn ngang</item>
+        <item>Luôn dọc</item>
+    </string-array>
+    <string-array name="orientation_values">
+        <item>auto</item>
+        <item>landscape</item>
+        <item>portrait</item>
+    </string-array>
+</resources>

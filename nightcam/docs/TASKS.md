@@ -92,7 +92,8 @@ Ghi chú: giám sát mỗi 15 giây (pin, nhiệt, dung lượng, file đứng y
 - **Kiểm tra máy:** quay 2 giờ 15 phút tắt màn hình (vượt mốc 2 giờ khiến XSCamera dừng).
   Quay qua đêm khi cắm sạc. Quay tới lúc đầy bộ nhớ (đặt reserve lớn để thử nhanh).
 
-## [ ] T8: Giao diện hoàn chỉnh
+## [~] T8: Giao diện hoàn chỉnh
+Ghi chú: đã có chip preset, dòng ước lượng dung lượng, màn hình đang quay nền đen và ẩn điều khiển, giữ 1 giây để dừng, màn hình Cài đặt (PreferenceFragment ghi vào cùng SharedPreferences với ConfigStore). **Chưa làm: chữ tiếng Việt chưa chuyển hết vào strings.xml** (đang viết thẳng trong code). Chưa kiểm chứng trên máy.
 - Màn hình chờ: preview, chọn preset (chip), nút nét/EV, nút Cài đặt, nút Thông tin máy,
   dòng "≈ X GB/giờ · còn quay được ~Y giờ".
 - Màn hình đang quay: **nền đen tuyệt đối** (`#000000`), chữ xám mờ, cập nhật mỗi giây:
@@ -102,13 +103,15 @@ Ghi chú: giám sát mỗi 15 giây (pin, nhiệt, dung lượng, file đứng y
   Áp dụng cho lần quay sau, không đổi giữa phiên đang chạy.
 - Toàn bộ chữ hiển thị bằng tiếng Việt trong `strings.xml`.
 
-## [ ] T9: Log phiên
+## [x] T9: Log phiên
+Ghi chú: log ghi trong lúc quay (flush mỗi dòng, không đợi 30 giây vì lượng ghi nhỏ). Khi kết thúc copy sang Download/NightCam/session_*.txt. Không ghi nội dung hình hay tiếng.
 - `SessionLog`: ghi vào `filesDir/logs/` trong lúc quay (append có buffer, flush mỗi 30 s).
   Kết thúc phiên thì copy sang `Download/NightCam/session_<stamp>.txt` qua `MediaStore.Downloads`.
 - Nội dung: DeviceCaps JSON, config đã yêu cầu so với config thực, mọi chuyển state, mỗi segment
   (tên, byte, thời lượng), FPS/exposure/ISO mỗi 10 s, nhiệt, pin, lỗi, lý do dừng. **Không** log nội dung hình hay tiếng.
 
-## [ ] T10: Hoàn thiện và phát hành
+## [x] T10: Hoàn thiện và phát hành
+Ghi chú: bản release R8 build được, phiên bản 2 (0.9.0), không có quyền INTERNET, ký bằng key sideload. Xem nightcam/README.md. Vẫn cần kiểm tra trên Pixel 3 XL.
 - Bản `assembleRelease` (R8) chạy được. Tăng `versionCode`/`versionName`.
 - Viết `nightcam/README.md` tiếng Việt cho người dùng: cách tải APK từ GitHub Actions (tab Actions → run → Artifacts),
   cài APK trên Pixel ("Cài ứng dụng không rõ nguồn gốc"), các preset, mẹo quay đêm (PLAN 3.3),

@@ -33,6 +33,13 @@ import com.tue.nightcam.core.Calc
 import com.tue.nightcam.core.ConfigValidator
 import com.tue.nightcam.core.Presets
 import com.tue.nightcam.databinding.ActivityMainBinding
+import com.tue.nightcam.record.ConfigStore
+import com.tue.nightcam.settings.SettingsActivity
+import android.os.StatFs
+import android.os.Environment
+import com.google.android.material.chip.Chip
+import android.view.View
+import android.view.ViewConfiguration
 import com.tue.nightcam.preview.PreviewTransform
 import com.tue.nightcam.probe.CapabilityProbe
 import com.tue.nightcam.probe.toJson
@@ -59,6 +66,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val KEY_ASKED_BATTERY = "asked_battery_exemption"
+        private const val HOLD_TO_STOP_MS = 1_000L
     }
 
     private val timerTick = object : Runnable {
@@ -101,7 +109,12 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         binding.btnRecord.setOnClickListener { onRecordClicked() }
+        binding.btnRecord.setOnTouchListener { _, event -> onRecordTouch(event) }
         binding.btnInfo.setOnClickListener { showDeviceInfo() }
+        binding.btnSettings.setOnClickListener {
+            startActivity(Intent(this, SettingsActivity::class.java))
+        }
+        buildPresetChips()
         binding.btnAutoFocus.setOnClickListener { service?.setAutoFocus() }
         binding.btnInfinity.setOnClickListener { service?.setFixedFocus(0f) }
         binding.btnLock.setOnClickListener { service?.setLocked(!lastState.locked) }
@@ -168,6 +181,80 @@ class MainActivity : AppCompatActivity() {
         attachPreviewIfReady()
     }
 
+    override fun onResume() {
+        super.onResume()
+        updateCapacityText()
+        highlightPreset()
+    }
+
+    /** Chip chọn nhanh preset. Chọn xong thì lưu thành cấu hình hiện tại. */
+    private fun buildPresetChips() {
+        Presets.ALL.forEach { preset ->
+            val chip = Chip(this).apply {
+                id = View.generateViewId()
+                text = preset.label
+                tag = preset.id
+                isCheckable = true
+                setOnClickListener {
+                    ConfigStore(this@MainActivity).save(preset.config)
+                    updateCapacityText()
+                }
+            }
+            binding.presetGroup.addView(chip)
+        }
+    }
+
+    private fun highlightPreset() {
+        val current = ConfigStore(this).load()
+        for (i in 0 until binding.presetGroup.childCount) {
+            val chip = binding.presetGroup.getChildAt(i) as Chip
+            val preset = Presets.byId(chip.tag as String)
+            chip.isChecked = preset?.config == current
+        }
+    }
+
+    /** Ước lượng dung lượng theo cấu hình hiện tại và chỗ trống thực tế. */
+    private fun updateCapacityText() {
+        val cfg = ConfigStore(this).load()
+        val free = freeBytesForUi()
+        val hours = Calc.hoursRemaining(free, cfg.reserveGb * 1_000_000_000L, cfg.totalBps)
+        val perHour = "≈ %.1f GB/giờ".format(Calc.gbPerHour(cfg.totalBps / 1e6))
+        binding.capacityText.text = if (hours != null) {
+            "$perHour · còn quay được ~%.1f giờ".format(hours)
+        } else {
+            perHour
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun freeBytesForUi(): Long = try {
+        StatFs(Environment.getExternalStorageDirectory().path).availableBytes
+    } catch (_: Exception) {
+        0L
+    }
+
+    /**
+     * Khi đang quay: giữ nút Dừng 1 giây mới dừng, tránh chạm nhầm.
+     * Khi chưa quay: để click xử lý như bình thường.
+     */
+    private fun onRecordTouch(event: MotionEvent): Boolean {
+        if (!isActive()) return false
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> handler.postDelayed(stopHold, HOLD_TO_STOP_MS)
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> handler.removeCallbacks(stopHold)
+        }
+        return true
+    }
+
+    private val stopHold = Runnable { stopRecording() }
+
+    private fun isActive(): Boolean =
+        lastState.status == RecStatus.RECORDING || lastState.status == RecStatus.PREPARING
+
+    private fun stopRecording() {
+        startService(Intent(this, RecordingService::class.java).setAction(RecordingService.ACTION_STOP))
+    }
+
     override fun onStop() {
         // Ẩn màn hình thì trả camera để tiết kiệm pin. Phiên quay đang chạy không bị ảnh hưởng.
         service?.detachPreview()
@@ -198,8 +285,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onRecordClicked() {
-        if (lastState.status == RecStatus.RECORDING || lastState.status == RecStatus.PREPARING) {
-            startService(Intent(this, RecordingService::class.java).setAction(RecordingService.ACTION_STOP))
+        if (isActive()) {
+            stopRecording()
             return
         }
         val missing = requiredPermissions().filter { !isGranted(it) }
@@ -240,10 +327,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun render(st: RecState) {
         lastState = st
-        val active = st.status == RecStatus.RECORDING || st.status == RecStatus.PREPARING
+        val active = isActive()
         val recording = st.status == RecStatus.RECORDING
-        binding.btnRecord.text = if (active) "Dừng" else "Quay"
+        binding.btnRecord.text = when {
+            recording -> "Giữ 1 giây để dừng"
+            active -> "Dừng"
+            else -> "Quay"
+        }
         binding.btnRecord.isEnabled = st.status != RecStatus.FINALIZING
+        applyRecordingLayout(active)
         binding.status.text = statusText(st)
         binding.warnings.text = st.warnings.joinToString("\n") { "• $it" }
         binding.focusText.text = listOf(st.focusText, st.measureText)
@@ -255,6 +347,20 @@ class MainActivity : AppCompatActivity() {
 
         handler.removeCallbacks(timerTick)
         if (recording) handler.post(timerTick) else renderTimer()
+        if (!active) updateCapacityText()
+    }
+
+    /**
+     * Khi đang quay: nền đen, ẩn preview và điều khiển, chỉ còn đồng hồ và nút dừng.
+     * Preview chỉ ẩn chứ không hủy surface, để khi dừng có thể xem trước lại ngay.
+     */
+    private fun applyRecordingLayout(active: Boolean) {
+        val visible = if (active) View.GONE else View.VISIBLE
+        binding.controlsPanel.visibility = visible
+        binding.bottomRow.visibility = visible
+        binding.previewView.visibility = if (active) View.INVISIBLE else View.VISIBLE
+        binding.status.setTextColor(if (active) 0xFF888888.toInt() else 0xFFFFFFFF.toInt())
+        binding.timer.setTextColor(if (active) 0xFF888888.toInt() else 0xFFFFFFFF.toInt())
     }
 
     private fun renderTimer() {
@@ -269,7 +375,7 @@ class MainActivity : AppCompatActivity() {
     private fun statusText(st: RecState): String = when (st.status) {
         RecStatus.IDLE -> st.message.ifEmpty { "Sẵn sàng" }
         RecStatus.PREPARING -> "Đang chuẩn bị…"
-        RecStatus.RECORDING -> "Đang quay\n${st.fileName}\n${st.healthText}"
+        RecStatus.RECORDING -> "Đang quay · ${st.fileName}\n${st.healthText}\nCó thể tắt màn hình bằng nút nguồn."
         RecStatus.FINALIZING -> "Đang lưu file…"
         RecStatus.ERROR -> "Lỗi: ${st.message}"
     }

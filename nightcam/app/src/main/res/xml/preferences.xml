@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <PreferenceCategory app:title="Hình ảnh">
+        <ListPreference
+            app:key="resolution"
+            app:title="Độ phân giải"
+            app:entries="@array/resolution_entries"
+            app:entryValues="@array/resolution_values"
+            app:defaultValue="1080p"
+            app:useSimpleSummaryProvider="true" />
+        <ListPreference
+            app:key="codec"
+            app:title="Codec"
+            app:entries="@array/codec_entries"
+            app:entryValues="@array/codec_values"
+            app:defaultValue="hevc"
+            app:useSimpleSummaryProvider="true" />
+        <EditTextPreference
+            app:key="video_mbps"
+            app:title="Bitrate video (Mbps)"
+            app:defaultValue="14"
+            app:useSimpleSummaryProvider="true" />
+        <ListPreference
+            app:key="profile"
+            app:title="Chế độ FPS"
+            app:entries="@array/profile_entries"
+            app:entryValues="@array/profile_values"
+            app:defaultValue="night"
+            app:useSimpleSummaryProvider="true" />
+        <EditTextPreference
+            app:key="fps_floor"
+            app:title="FPS thấp nhất khi tối (7–30)"
+            app:defaultValue="15"
+            app:useSimpleSummaryProvider="true" />
+        <ListPreference
+            app:key="nr"
+            app:title="Khử nhiễu"
+            app:entries="@array/nr_entries"
+            app:entryValues="@array/nr_values"
+            app:defaultValue="fast"
+            app:useSimpleSummaryProvider="true" />
+        <ListPreference
+            app:key="orientation"
+            app:title="Hướng video"
+            app:entries="@array/orientation_entries"
+            app:entryValues="@array/orientation_values"
+            app:defaultValue="auto"
+            app:useSimpleSummaryProvider="true" />
+        <SwitchPreferenceCompat
+            app:key="ois"
+            app:title="Chống rung quang học (OIS)"
+            app:defaultValue="true" />
+        <SwitchPreferenceCompat
+            app:key="eis"
+            app:title="Chống rung điện tử (EIS)"
+            app:summary="Cắt khung hình và tốn pin hơn. Chỉ bật khi cầm tay."
+            app:defaultValue="false" />
+    </PreferenceCategory>
+
+    <PreferenceCategory app:title="Âm thanh và lưu trữ">
+        <SwitchPreferenceCompat
+            app:key="audio"
+            app:title="Thu âm"
+            app:defaultValue="true" />
+        <EditTextPreference
+            app:key="segment_min"
+            app:title="Độ dài mỗi đoạn (phút)"
+            app:defaultValue="10"
+            app:useSimpleSummaryProvider="true" />
+        <EditTextPreference
+            app:key="reserve_gb"
+            app:title="Dung lượng dự phòng (GB)"
+            app:summary="Dừng quay khi còn dưới mức này."
+            app:defaultValue="1"
+            app:useSimpleSummaryProvider="true" />
+    </PreferenceCategory>
+
+    <PreferenceCategory app:title="Bảo vệ máy">
+        <SwitchPreferenceCompat
+            app:key="thermal_downgrade"
+            app:title="Tự hạ chất lượng khi máy nóng"
+            app:defaultValue="true" />
+    </PreferenceCategory>
+
+</PreferenceScreen>

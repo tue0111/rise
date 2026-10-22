@@ -42,6 +42,8 @@ import com.tue.nightcam.core.FocusRules
 import com.tue.nightcam.core.FpsRangePicker
 import com.tue.nightcam.core.HealthRules
 import com.tue.nightcam.core.RecordingConfig
+import com.tue.nightcam.log.SessionLog
+import com.tue.nightcam.probe.toJson
 import com.tue.nightcam.probe.CapabilityProbe
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -110,6 +112,7 @@ class RecordingService : LifecycleService() {
     private var measureSamples = 0
 
     private var plan: Plan? = null
+    private var log: SessionLog? = null
     private var sessionActive = false
     private var sessionStartedMs = 0L
     private var segmentIndex = 0
@@ -247,6 +250,12 @@ class RecordingService : LifecycleService() {
                 warnings = result.warnings,
             )
             gaps.clear()
+            log = SessionLog.open(this, plan?.stamp.orEmpty()).also { l ->
+                l.line("thiết bị: ${c.toJson()}")
+                l.line("yêu cầu: ${requested.toMap()}")
+                l.line("thực tế: ${result.config.toMap()}")
+                result.warnings.forEach { l.line("cảnh báo: $it") }
+            }
             sessionActive = true
             sessionStartedMs = System.currentTimeMillis()
             SegmentStore.writing = true
@@ -265,6 +274,7 @@ class RecordingService : LifecycleService() {
         try {
             val segment = segments.create(p.stamp, segmentIndex)
             currentSegment = segment
+            log?.line("mở đoạn ${segment.name}")
             val surface = recorder.prepare(
                 config = p.cfg,
                 output = segment.pfd.fileDescriptor,
@@ -362,6 +372,7 @@ class RecordingService : LifecycleService() {
         nextSegment = null
         segmentIndex += 1
         wakeLock?.acquire(WAKE_LOCK_MS)
+        log?.line("chuyển sang đoạn ${next.name}")
         _state.value = _state.value.copy(segmentIndex = segmentIndex, fileName = next.name)
         notifyForeground()
     }
@@ -426,13 +437,13 @@ class RecordingService : LifecycleService() {
         val tempC = (battery?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0) / 10.0
         val free = freeBytes()
         val hours = Calc.hoursRemaining(free, p.cfg.reserveGb * 1_000_000_000L, p.cfg.totalBps)
-        _state.value = _state.value.copy(
-            healthText = "Pin $percent % · %.0f°C · còn %.1f GB%s".format(
-                tempC,
-                free / 1e9,
-                hours?.let { " (≈ %.1f giờ)".format(it) }.orEmpty(),
-            ),
+        val healthText = "Pin $percent % · %.0f°C · còn %.1f GB%s".format(
+            tempC,
+            free / 1e9,
+            hours?.let { " (≈ %.1f giờ)".format(it) }.orEmpty(),
         )
+        _state.value = _state.value.copy(healthText = healthText)
+        log?.line("sức khỏe: $healthText, nhiệt=$thermalStatus, cắm sạc=$plugged")
 
         val stop = listOf(
             HealthRules.storage(free, p.cfg.reserveGb * 1_000_000_000L),
@@ -482,6 +493,7 @@ class RecordingService : LifecycleService() {
         camHandler.post {
             camHandler.removeCallbacks(healthRunnable)
             var message = reason
+            log?.line(if (error) "lỗi, dừng: $reason" else "dừng: $reason")
             if (sessionActive) {
                 sessionActive = false
                 SegmentStore.writing = false
@@ -504,6 +516,12 @@ class RecordingService : LifecycleService() {
             )
             publishControls()
             mainHandler.removeCallbacks(notifyTicker)
+            log?.let { l ->
+                val exported = l.close(contentResolver)
+                log = null
+                if (!exported) message = "$message (không lưu được log)"
+            }
+            _state.value = _state.value.copy(message = message)
             if (!error && previewSurface != null) openPreview()
             mainHandler.post {
                 ServiceCompat.stopForeground(this, STOP_FOREGROUND_REMOVE)
@@ -664,6 +682,7 @@ class RecordingService : LifecycleService() {
         val iso = if (measureSamples > 0) isoSum / measureSamples else 0L
         val shutter = if (expNs > 0) "1/${(1e9 / expNs).toInt()} s" else "— s"
         _state.value = _state.value.copy(measureText = "%.1f fps · %s · ISO %d".format(fps, shutter, iso))
+        log?.line("đo: %.2f fps, $shutter, ISO $iso".format(fps))
         measureStartNs = 0L
         measureFrames = 0
         expSumNs = 0L
