@@ -14,6 +14,9 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
+import android.net.Uri
+import android.provider.Settings
 import android.view.MotionEvent
 import android.view.Surface
 import android.view.TextureView
@@ -53,6 +56,10 @@ class MainActivity : AppCompatActivity() {
     private var lastState = RecState()
     private var previewSurface: Surface? = null
     private var sensorOrientation = 90
+
+    companion object {
+        private const val KEY_ASKED_BATTERY = "asked_battery_exemption"
+    }
 
     private val timerTick = object : Runnable {
         override fun run() {
@@ -97,6 +104,7 @@ class MainActivity : AppCompatActivity() {
         binding.btnInfo.setOnClickListener { showDeviceInfo() }
         binding.btnAutoFocus.setOnClickListener { service?.setAutoFocus() }
         binding.btnInfinity.setOnClickListener { service?.setFixedFocus(0f) }
+        binding.btnLock.setOnClickListener { service?.setLocked(!lastState.locked) }
         binding.btnEvMinus.setOnClickListener { service?.adjustEv(-1) }
         binding.btnEvPlus.setOnClickListener { service?.adjustEv(1) }
         binding.focusSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -198,8 +206,28 @@ class MainActivity : AppCompatActivity() {
         if (!cameraGranted()) {
             permissionLauncher.launch(missing.toTypedArray())
         } else {
+            askBatteryExemptionOnce()
             startRecording()
         }
+    }
+
+    /** Nhắc tắt tối ưu pin đúng một lần, để máy không dừng app khi quay lâu. */
+    private fun askBatteryExemptionOnce() {
+        val prefs = getSharedPreferences("nightcam_ui", Context.MODE_PRIVATE)
+        val pm = getSystemService(PowerManager::class.java)
+        if (prefs.getBoolean(KEY_ASKED_BATTERY, false) || pm.isIgnoringBatteryOptimizations(packageName)) return
+        prefs.edit().putBoolean(KEY_ASKED_BATTERY, true).apply()
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Tắt tối ưu pin")
+            .setMessage("Để quay lâu không bị hệ thống dừng, hãy cho phép NightCam chạy không giới hạn pin.")
+            .setPositiveButton("Mở cài đặt") { _, _ ->
+                startActivity(
+                    Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                        .setData(Uri.parse("package:$packageName")),
+                )
+            }
+            .setNegativeButton("Để sau", null)
+            .show()
     }
 
     private fun startRecording() {
@@ -218,7 +246,10 @@ class MainActivity : AppCompatActivity() {
         binding.btnRecord.isEnabled = st.status != RecStatus.FINALIZING
         binding.status.text = statusText(st)
         binding.warnings.text = st.warnings.joinToString("\n") { "• $it" }
-        binding.focusText.text = st.focusText
+        binding.focusText.text = listOf(st.focusText, st.measureText)
+            .filter { it.isNotEmpty() }
+            .joinToString("  ·  ")
+        binding.btnLock.text = if (st.locked) "Mở khóa sáng/màu" else "Khóa sáng/màu"
         binding.evText.text = st.evText
         binding.focusSeek.visibility = if (st.manualFocus) android.view.View.VISIBLE else android.view.View.GONE
 
@@ -238,7 +269,7 @@ class MainActivity : AppCompatActivity() {
     private fun statusText(st: RecState): String = when (st.status) {
         RecStatus.IDLE -> st.message.ifEmpty { "Sẵn sàng" }
         RecStatus.PREPARING -> "Đang chuẩn bị…"
-        RecStatus.RECORDING -> "Đang quay\n${st.fileName}"
+        RecStatus.RECORDING -> "Đang quay\n${st.fileName}\n${st.healthText}"
         RecStatus.FINALIZING -> "Đang lưu file…"
         RecStatus.ERROR -> "Lỗi: ${st.message}"
     }

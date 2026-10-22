@@ -2,6 +2,12 @@ package com.tue.nightcam.record
 
 import android.Manifest
 import android.app.Notification
+import android.content.IntentFilter
+import android.os.BatteryManager
+import android.os.Environment
+import android.os.StatFs
+import android.system.Os
+import java.util.concurrent.Executor
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -34,6 +40,7 @@ import com.tue.nightcam.core.DeviceCaps
 import com.tue.nightcam.core.FocusMode
 import com.tue.nightcam.core.FocusRules
 import com.tue.nightcam.core.FpsRangePicker
+import com.tue.nightcam.core.HealthRules
 import com.tue.nightcam.core.RecordingConfig
 import com.tue.nightcam.probe.CapabilityProbe
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -62,7 +69,9 @@ class RecordingService : LifecycleService() {
         val hint: Int,
         val stamp: String,
         val warnings: List<String>,
-    )
+    ) {
+        fun withConfig(next: RecordingConfig) = Plan(next, cameraId, hint, stamp, warnings)
+    }
 
     private val binder = LocalBinder()
 
@@ -82,6 +91,23 @@ class RecordingService : LifecycleService() {
     private var previewSurface: Surface? = null
     private var focus: FocusMode = FocusMode.Continuous
     private var evIndex = 0
+    private var locked = false
+
+    // Giám sát sức khỏe phiên.
+    private var thermalStatus = 0
+    private var thermalListener: PowerManager.OnThermalStatusChangedListener? = null
+    private var cameraRetries = 0
+    private val restartTimes = mutableListOf<Long>()
+    private var lastSize = 0L
+    private var lastGrowthMs = 0L
+    private val healthRunnable = Runnable { healthTick() }
+
+    // Số liệu đo FPS, cửa sổ 10 giây.
+    private var measureStartNs = 0L
+    private var measureFrames = 0
+    private var expSumNs = 0L
+    private var isoSum = 0L
+    private var measureSamples = 0
 
     private var plan: Plan? = null
     private var sessionActive = false
@@ -107,11 +133,15 @@ class RecordingService : LifecycleService() {
         camThread = HandlerThread("nc-camera").apply { start() }
         camHandler = Handler(camThread.looper)
         camera = CameraController(getSystemService(CameraManager::class.java), camHandler).apply {
-            onFailure = { msg -> finishSession(msg, error = true) }
+            onFailure = { msg -> onCameraFailure(msg) }
             onFrame = { result -> onFrame(result) }
         }
         recorder = RecorderController(applicationContext)
         segments = SegmentStore(contentResolver)
+        val pm = getSystemService(PowerManager::class.java)
+        val thermal = PowerManager.OnThermalStatusChangedListener { status -> camHandler.post { thermalStatus = status } }
+        thermalListener = thermal
+        pm.addThermalStatusListener(Executor { camHandler.post(it) }, thermal)
     }
 
     override fun onBind(intent: Intent): IBinder {
@@ -161,6 +191,13 @@ class RecordingService : LifecycleService() {
     /** Khóa khoảng cách nét bằng diopter. 0 là vô cực. */
     fun setFixedFocus(diopters: Float) = camHandler.post {
         focus = FocusMode.Locked(diopters)
+        camera.updateRequest(::configure)
+        publishControls()
+    }
+
+    /** Khóa hoặc mở khóa AE và AWB, dùng cho cảnh cố định khi sáng và màu đã ổn định. */
+    fun setLocked(on: Boolean) = camHandler.post {
+        locked = on
         camera.updateRequest(::configure)
         publishControls()
     }
@@ -273,6 +310,11 @@ class RecordingService : LifecycleService() {
             failWith("Recorder không chạy: ${e.message}")
             return
         }
+        cameraRetries = 0
+        lastSize = 0L
+        lastGrowthMs = System.currentTimeMillis()
+        camHandler.removeCallbacks(healthRunnable)
+        camHandler.postDelayed(healthRunnable, HEALTH_INTERVAL_MS)
         _state.value = _state.value.copy(
             status = RecStatus.RECORDING,
             startedAtMs = sessionStartedMs,
@@ -291,7 +333,7 @@ class RecordingService : LifecycleService() {
         when (what) {
             MediaRecorder.MEDIA_RECORDER_INFO_MAX_FILESIZE_APPROACHING -> prepareNextSegment()
             MediaRecorder.MEDIA_RECORDER_INFO_NEXT_OUTPUT_FILE_STARTED -> rotateToNextSegment()
-            MediaRecorder.MEDIA_RECORDER_INFO_MAX_FILESIZE_REACHED -> restartSegment()
+            MediaRecorder.MEDIA_RECORDER_INFO_MAX_FILESIZE_REACHED -> restartWithBudget("Đủ dung lượng đoạn")
         }
     }
 
@@ -325,11 +367,31 @@ class RecordingService : LifecycleService() {
     }
 
     /**
-     * Recorder đã dừng vì đủ dung lượng và không có file kế tiếp (801).
-     * Mở lại camera và recorder cho đoạn mới. Khoảng ngắt được ghi vào cảnh báo.
+     * Recorder đã dừng vì đủ dung lượng và không có file kế tiếp (801). Mở lại đoạn mới.
+     * Mỗi lần mở lại đều được tính vào giới hạn 3 lần mỗi giờ.
      */
-    private fun restartSegment() {
+    private fun restartWithBudget(reason: String, next: RecordingConfig? = null) {
         if (!sessionActive) return
+        val now = System.currentTimeMillis()
+        if (!HealthRules.restartAllowed(restartTimes, now)) {
+            finishSession("Mở lại quá nhiều lần trong một giờ, đã dừng")
+            return
+        }
+        restartTimes += now
+        restartSegment(reason, next)
+    }
+
+    private fun restartSegment(reason: String, next: RecordingConfig? = null) {
+        val p = plan ?: return
+        tearDownPipeline()
+        if (next != null) plan = p.withConfig(next)
+        gaps += "$reason (từ đoạn ${segmentIndex + 1})"
+        segmentIndex += 1
+        camHandler.postDelayed({ startSegment() }, RESTART_DELAY_MS)
+    }
+
+    /** Dừng recorder, đóng camera và hoàn tất các file đang mở. Chạy trên nc-camera. */
+    private fun tearDownPipeline() {
         nextSegment?.let { segments.finalize(it) }
         nextSegment = null
         recorder.stop()
@@ -337,9 +399,76 @@ class RecordingService : LifecycleService() {
         camera.close()
         currentSegment?.let { segments.finalize(it) }
         currentSegment = null
-        gaps += "Có khoảng ngắt khi chuyển sang đoạn ${segmentIndex + 1}"
-        segmentIndex += 1
-        camHandler.postDelayed({ startSegment() }, RESTART_DELAY_MS)
+    }
+
+    /** Camera lỗi giữa phiên: thử mở lại tối đa 2 lần, cách nhau 2 giây. */
+    private fun onCameraFailure(msg: String) {
+        if (sessionActive && cameraRetries < MAX_CAMERA_RETRIES) {
+            cameraRetries++
+            gaps += "Camera lỗi ($msg), đã mở lại"
+            tearDownPipeline()
+            segmentIndex += 1
+            camHandler.postDelayed({ startSegment() }, CAMERA_RETRY_DELAY_MS)
+        } else {
+            finishSession(msg, error = true)
+        }
+    }
+
+    /** Kiểm tra pin, nhiệt, dung lượng và file đứng yên. Chạy trên nc-camera mỗi 15 giây. */
+    private fun healthTick() {
+        if (!sessionActive) return
+        val p = plan ?: return
+        val battery = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+        val percent = if (level >= 0 && scale > 0) level * 100 / scale else 100
+        val plugged = (battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
+        val tempC = (battery?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0) / 10.0
+        val free = freeBytes()
+        val hours = Calc.hoursRemaining(free, p.cfg.reserveGb * 1_000_000_000L, p.cfg.totalBps)
+        _state.value = _state.value.copy(
+            healthText = "Pin $percent % · %.0f°C · còn %.1f GB%s".format(
+                tempC,
+                free / 1e9,
+                hours?.let { " (≈ %.1f giờ)".format(it) }.orEmpty(),
+            ),
+        )
+
+        val stop = listOf(
+            HealthRules.storage(free, p.cfg.reserveGb * 1_000_000_000L),
+            HealthRules.battery(percent, plugged),
+            HealthRules.thermal(thermalStatus, p.cfg.thermalDowngrade),
+        ).firstOrNull { it is HealthRules.Decision.Stop } as HealthRules.Decision.Stop?
+        if (stop != null) {
+            finishSession(stop.reason)
+            return
+        }
+        val downgrade = HealthRules.thermal(thermalStatus, p.cfg.thermalDowngrade) as? HealthRules.Decision.Downgrade
+        if (downgrade != null) {
+            val next = HealthRules.downgrade(p.cfg)
+            if (next != p.cfg) {
+                restartWithBudget(downgrade.reason, next)
+                return
+            }
+        }
+
+        val size = currentSegment?.let { Os.fstat(it.pfd.fileDescriptor).st_size } ?: 0L
+        val now = System.currentTimeMillis()
+        if (size > lastSize) {
+            lastSize = size
+            lastGrowthMs = now
+        } else if (HealthRules.stalled(lastSize, size, (now - lastGrowthMs) / 1000)) {
+            restartWithBudget("Ghi bị đứng, mở lại đoạn")
+            return
+        }
+        camHandler.postDelayed(healthRunnable, HEALTH_INTERVAL_MS)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun freeBytes(): Long = try {
+        StatFs(Environment.getExternalStorageDirectory().path).availableBytes
+    } catch (_: Exception) {
+        0L
     }
 
     private fun failWith(message: String) = finishSession(message, error = true)
@@ -351,6 +480,7 @@ class RecordingService : LifecycleService() {
      */
     private fun finishSession(reason: String, error: Boolean = false) {
         camHandler.post {
+            camHandler.removeCallbacks(healthRunnable)
             var message = reason
             if (sessionActive) {
                 sessionActive = false
@@ -359,10 +489,7 @@ class RecordingService : LifecycleService() {
                 val stopped = recorder.stop()
                 camera.close()
                 recorder.release()
-                currentSegment?.let { segments.finalize(it) }
-                currentSegment = null
-                nextSegment?.let { segments.finalize(it) }
-                nextSegment = null
+                tearDownPipeline()
                 plan = null
                 releaseWakeLock()
                 if (!stopped) message = "$reason (đoạn cuối có thể không đọc được)"
@@ -373,6 +500,7 @@ class RecordingService : LifecycleService() {
                 startedAtMs = 0L,
                 fileName = "",
                 warnings = emptyList(),
+                healthText = "",
             )
             publishControls()
             mainHandler.removeCallbacks(notifyTicker)
@@ -423,6 +551,7 @@ class RecordingService : LifecycleService() {
             focusText = focusLabel(c),
             evText = evText,
             manualFocus = c != null && c.minFocusDiopters > 0f,
+            locked = locked,
         )
     }
 
@@ -455,6 +584,8 @@ class RecordingService : LifecycleService() {
         b.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
         b.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON)
         b.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, evIndex)
+        b.set(CaptureRequest.CONTROL_AE_LOCK, locked)
+        b.set(CaptureRequest.CONTROL_AWB_LOCK, locked)
         b.set(
             CaptureRequest.NOISE_REDUCTION_MODE,
             if (cfg.nrId == RecordingConfig.NR_HQ) {
@@ -497,6 +628,7 @@ class RecordingService : LifecycleService() {
 
     /** Kết quả từng frame, dùng để khóa nét sau khi chạm. Chạy trên nc-camera. */
     private fun onFrame(result: CaptureResult) {
+        measure(result)
         val current = focus as? FocusMode.Tap ?: return
         val afState = result.get(CaptureResult.CONTROL_AF_STATE)
         val locked = afState == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED ||
@@ -512,6 +644,31 @@ class RecordingService : LifecycleService() {
             camera.updateRequest(::configure)
             publishControls()
         }
+    }
+
+    /** Đo FPS thật và trung bình màn trập, ISO mỗi 10 giây. Chạy trên nc-camera. */
+    private fun measure(result: CaptureResult) {
+        val now = System.nanoTime()
+        if (measureStartNs == 0L) measureStartNs = now
+        measureFrames++
+        result.get(CaptureResult.SENSOR_EXPOSURE_TIME)?.let {
+            expSumNs += it
+            measureSamples++
+        }
+        result.get(CaptureResult.SENSOR_SENSITIVITY)?.let { isoSum += it }
+
+        val elapsed = now - measureStartNs
+        if (elapsed < MEASURE_WINDOW_NS) return
+        val fps = measureFrames * 1e9 / elapsed
+        val expNs = if (measureSamples > 0) expSumNs / measureSamples else 0L
+        val iso = if (measureSamples > 0) isoSum / measureSamples else 0L
+        val shutter = if (expNs > 0) "1/${(1e9 / expNs).toInt()} s" else "— s"
+        _state.value = _state.value.copy(measureText = "%.1f fps · %s · ISO %d".format(fps, shutter, iso))
+        measureStartNs = 0L
+        measureFrames = 0
+        expSumNs = 0L
+        isoSum = 0L
+        measureSamples = 0
     }
 
     private fun antibandingFor(caps: DeviceCaps): Int? = when {
@@ -594,6 +751,7 @@ class RecordingService : LifecycleService() {
 
     override fun onDestroy() {
         mainHandler.removeCallbacks(notifyTicker)
+        thermalListener?.let { getSystemService(PowerManager::class.java).removeThermalStatusListener(it) }
         finishSession("Dịch vụ đã dừng")
         camThread.quitSafely()
         super.onDestroy()
@@ -609,6 +767,10 @@ class RecordingService : LifecycleService() {
         private const val NOTIFY_INTERVAL_MS = 10_000L
         private const val WAKE_LOCK_MS = 12 * 60 * 60 * 1000L
         private const val RESTART_DELAY_MS = 1_000L
+        private const val MEASURE_WINDOW_NS = 10_000_000_000L
+        private const val HEALTH_INTERVAL_MS = 15_000L
+        private const val CAMERA_RETRY_DELAY_MS = 2_000L
+        private const val MAX_CAMERA_RETRIES = 2
         private const val STOP_MESSAGE = "Đã dừng"
     }
 }

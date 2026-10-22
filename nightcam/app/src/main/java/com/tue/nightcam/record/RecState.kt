@@ -16,4 +16,10 @@ data class RecState(
     val evText: String = "EV 0",
     /** Máy có lấy nét tay (có minFocusDiopters > 0). */
     val manualFocus: Boolean = false,
+    /** Đang khóa AE và AWB. */
+    val locked: Boolean = false,
+    /** Số liệu đo được: FPS, màn trập, ISO. */
+    val measureText: String = "",
+    /** Pin, nhiệt và dung lượng còn lại, cập nhật mỗi 15 giây. */
+    val healthText: String = "",
 )

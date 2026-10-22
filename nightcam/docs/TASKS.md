@@ -70,7 +70,8 @@ Ghi chú: preview mở khi Activity hiện, trả camera khi ẩn. Chạm lấy 
 - **Kiểm tra máy:** trong phòng tối, chạm khóa nét vào một vật cách 2 m rồi quay 5 phút.
   Hình không được "thở" nét.
 
-## [ ] T6: Profile Đêm và các điều khiển ảnh
+## [~] T6: Profile Đêm và các điều khiển ảnh
+Ghi chú: đã làm profile qua FpsRangePicker, chống nhấp nháy 50 Hz, NR, OIS/EIS, khóa AE/AWB (nút "Khóa sáng/màu"), đo FPS và màn trập/ISO mỗi 10 giây. **Chưa làm: phơi sáng tay** (cần thêm cấu hình và UI). Chưa kiểm chứng trên máy.
 - Áp `FpsRangePicker` theo profile, antibanding 50 Hz, NR FAST/HQ, EIS, OIS, AE lock, AWB lock
   (mục 5). Mọi giá trị đều phải qua kiểm tra hỗ trợ từ `DeviceCaps`.
 - Đo FPS thật cùng exposure/ISO trung bình mỗi 10 s (mục 7), đưa vào state và log.
@@ -79,7 +80,8 @@ Ghi chú: preview mở khi Activity hiện, trả camera khi ẩn. Chạm lấy 
 - **Kiểm tra máy:** quay cùng một cảnh tối 1 phút ở Standard và 1 phút ở Night, so độ sáng và nhiễu.
   Màn hình Night phải hiện FPS dưới 30 khi cảnh đủ tối.
 
-## [ ] T7: Độ bền phiên quay dài
+## [x] T7: Độ bền phiên quay dài
+Ghi chú: giám sát mỗi 15 giây (pin, nhiệt, dung lượng, file đứng yên). Mất camera thì thử mở lại 2 lần. Giới hạn 3 lần mở lại mỗi giờ. Nhắc tắt tối ưu pin một lần. Quy tắc quyết định có 7 test. Chưa thử quay 2 giờ 15 phút trên máy.
 - `Watchdog` + `HealthMonitor` (mục 11): file không lớn thêm, nhiệt, pin yếu, hết chỗ.
 - Mất camera (`onDisconnected/onError`): thử mở lại 2 lần, cách nhau 2 s, rồi dừng an toàn.
 - Hạ chất lượng khi máy nóng (nếu `thermalDowngrade`): 4K→1080p, rồi hạ bitrate 25%.
