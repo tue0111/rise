@@ -27,6 +27,8 @@ data class DeviceCaps(
     val avcMaxBps: Int?,
     val exposureRangeNs: LongRange?,
     val isoRange: IntRange?,
+    val activeWidth: Int,
+    val activeHeight: Int,
 ) {
     fun supportsSize(width: Int, height: Int): Boolean = (width to height) in recordSizes
 

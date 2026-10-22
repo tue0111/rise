@@ -4,15 +4,20 @@ import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
+import android.graphics.SurfaceTexture
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.view.MotionEvent
 import android.view.Surface
+import android.view.TextureView
+import android.widget.SeekBar
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -25,12 +30,13 @@ import com.tue.nightcam.core.Calc
 import com.tue.nightcam.core.ConfigValidator
 import com.tue.nightcam.core.Presets
 import com.tue.nightcam.databinding.ActivityMainBinding
+import com.tue.nightcam.preview.PreviewTransform
 import com.tue.nightcam.probe.CapabilityProbe
 import com.tue.nightcam.probe.toJson
 import com.tue.nightcam.record.RecState
-import com.tue.nightcam.record.SegmentStore
 import com.tue.nightcam.record.RecStatus
 import com.tue.nightcam.record.RecordingService
+import com.tue.nightcam.record.SegmentStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -45,6 +51,8 @@ class MainActivity : AppCompatActivity() {
     private var bound = false
     private var stateJob: Job? = null
     private var lastState = RecState()
+    private var previewSurface: Surface? = null
+    private var sensorOrientation = 90
 
     private val timerTick = object : Runnable {
         override fun run() {
@@ -72,6 +80,7 @@ class MainActivity : AppCompatActivity() {
                     svc.state.collect { render(it) }
                 }
             }
+            attachPreviewIfReady()
         }
 
         override fun onServiceDisconnected(name: ComponentName) {
@@ -86,8 +95,49 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
         binding.btnRecord.setOnClickListener { onRecordClicked() }
         binding.btnInfo.setOnClickListener { showDeviceInfo() }
+        binding.btnAutoFocus.setOnClickListener { service?.setAutoFocus() }
+        binding.btnInfinity.setOnClickListener { service?.setFixedFocus(0f) }
+        binding.btnEvMinus.setOnClickListener { service?.adjustEv(-1) }
+        binding.btnEvPlus.setOnClickListener { service?.adjustEv(1) }
+        binding.focusSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seek: SeekBar, progress: Int, fromUser: Boolean) {
+                if (fromUser) service?.setFocusFraction(progress / 100f)
+            }
+
+            override fun onStartTrackingTouch(seek: SeekBar) {}
+            override fun onStopTrackingTouch(seek: SeekBar) {}
+        })
+        binding.previewView.setOnTouchListener { view, event ->
+            if (event.action == MotionEvent.ACTION_UP) {
+                service?.tapFocus(event.x / view.width, event.y / view.height)
+            }
+            true
+        }
+        binding.previewView.surfaceTextureListener = previewListener
         render(RecState())
         if (savedInstanceState == null) recoverLeftovers()
+    }
+
+    private val previewListener = object : TextureView.SurfaceTextureListener {
+        override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
+            texture.setDefaultBufferSize(PreviewTransform.BUFFER_WIDTH, PreviewTransform.BUFFER_HEIGHT)
+            previewSurface = Surface(texture)
+            applyPreviewTransform()
+            attachPreviewIfReady()
+        }
+
+        override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) {
+            applyPreviewTransform()
+        }
+
+        override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
+            service?.detachPreview()
+            previewSurface?.release()
+            previewSurface = null
+            return true
+        }
+
+        override fun onSurfaceTextureUpdated(texture: SurfaceTexture) {}
     }
 
     /** Phục hồi file dở dang của lần chạy trước (app bị chết giữa chừng). */
@@ -107,11 +157,13 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         bindToService()
+        attachPreviewIfReady()
     }
 
     override fun onStop() {
+        // Ẩn màn hình thì trả camera để tiết kiệm pin. Phiên quay đang chạy không bị ảnh hưởng.
+        service?.detachPreview()
         super.onStop()
-        // Đóng màn hình không dừng phiên quay: service tự chạy dưới dạng foreground.
         if (bound) {
             unbindService(connection)
             bound = false
@@ -123,8 +175,18 @@ class MainActivity : AppCompatActivity() {
 
     private fun bindToService() {
         if (!bound) {
-            bound = bindService(Intent(this, RecordingService::class.java), connection, 0)
+            bound = bindService(Intent(this, RecordingService::class.java), connection, Context.BIND_AUTO_CREATE)
         }
+    }
+
+    private fun attachPreviewIfReady() {
+        val svc = service ?: return
+        val surface = previewSurface ?: return
+        svc.attachPreview(surface)
+    }
+
+    private fun applyPreviewTransform() {
+        PreviewTransform.apply(binding.previewView, sensorOrientation)
     }
 
     private fun onRecordClicked() {
@@ -151,13 +213,17 @@ class MainActivity : AppCompatActivity() {
     private fun render(st: RecState) {
         lastState = st
         val active = st.status == RecStatus.RECORDING || st.status == RecStatus.PREPARING
+        val recording = st.status == RecStatus.RECORDING
         binding.btnRecord.text = if (active) "Dừng" else "Quay"
         binding.btnRecord.isEnabled = st.status != RecStatus.FINALIZING
         binding.status.text = statusText(st)
         binding.warnings.text = st.warnings.joinToString("\n") { "• $it" }
+        binding.focusText.text = st.focusText
+        binding.evText.text = st.evText
+        binding.focusSeek.visibility = if (st.manualFocus) android.view.View.VISIBLE else android.view.View.GONE
 
         handler.removeCallbacks(timerTick)
-        if (st.status == RecStatus.RECORDING) handler.post(timerTick) else renderTimer()
+        if (recording) handler.post(timerTick) else renderTimer()
     }
 
     private fun renderTimer() {
@@ -214,6 +280,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun buildInfoText(): String {
         val caps = CapabilityProbe.probe(this) ?: return "Không tìm thấy camera sau."
+        sensorOrientation = caps.sensorOrientation
         val result = ConfigValidator.validate(Presets.NIGHT_FIXED.config, caps)
         return buildString {
             appendLine("Preset: ${Presets.NIGHT_FIXED.label}")

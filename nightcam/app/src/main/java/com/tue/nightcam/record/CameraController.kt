@@ -1,20 +1,22 @@
 package com.tue.nightcam.record
 
-import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraAccessException
+import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CameraMetadata
 import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.CaptureResult
+import android.hardware.camera2.TotalCaptureResult
 import android.hardware.camera2.params.OutputConfiguration
 import android.hardware.camera2.params.SessionConfiguration
 import android.os.Handler
-import android.util.Range
 import android.view.Surface
 import java.util.concurrent.Executor
 
 /**
- * Sở hữu camera và session. Mọi callback chạy trên [handler] (thread nc-camera).
+ * Sở hữu camera và session. Camera có thể giữ mở cho preview rồi đổi session sang ghi hình
+ * mà không mở lại thiết bị. Mọi callback chạy trên [handler] (thread nc-camera).
  * Chỉ RecordingService được gọi class này.
  */
 class CameraController(
@@ -25,57 +27,85 @@ class CameraController(
     private val exec = Executor { handler.post(it) }
     private var device: CameraDevice? = null
     private var session: CameraCaptureSession? = null
+    private var opening = false
+    private val openWaiters = mutableListOf<() -> Unit>()
+
+    private var template = CameraDevice.TEMPLATE_PREVIEW
+    private var targets: List<Surface> = emptyList()
+    private var configure: (CaptureRequest.Builder) -> Unit = {}
 
     /** Gọi khi camera lỗi hoặc bị ngắt giữa chừng. */
     var onFailure: ((String) -> Unit)? = null
 
+    /** Gọi cho mỗi frame đã hoàn tất (dùng cho lấy nét). */
+    var onFrame: ((CaptureResult) -> Unit)? = null
+
+    val isOpen: Boolean get() = device != null
+
+    /**
+     * Mở camera. Nếu đang mở rồi thì gọi [onOpened] ngay. Nếu đang mở dở thì xếp hàng
+     * để không mở camera hai lần song song.
+     */
     fun open(cameraId: String, onOpened: () -> Unit) {
+        if (device != null) {
+            onOpened()
+            return
+        }
+        openWaiters += onOpened
+        if (opening) return
+        opening = true
         cameraManager.openCamera(cameraId, exec, object : CameraDevice.StateCallback() {
             override fun onOpened(camera: CameraDevice) {
                 device = camera
-                onOpened()
+                opening = false
+                val waiters = openWaiters.toList()
+                openWaiters.clear()
+                waiters.forEach { it() }
             }
 
             override fun onDisconnected(camera: CameraDevice) {
                 camera.close()
-                device = null
-                onFailure?.invoke("Mất kết nối camera")
+                failOpen("Mất kết nối camera")
             }
 
             override fun onError(camera: CameraDevice, error: Int) {
                 camera.close()
-                device = null
-                onFailure?.invoke("Lỗi camera (mã $error)")
+                failOpen("Lỗi camera (mã $error)")
             }
         })
     }
 
+    private fun failOpen(message: String) {
+        device = null
+        opening = false
+        openWaiters.clear()
+        onFailure?.invoke(message)
+    }
+
     /**
-     * Tạo session chỉ có một surface (surface của MediaRecorder). Khi session sẵn sàng,
-     * gửi repeating request rồi mới gọi [onReady] để bắt đầu recorder.
+     * Tạo session mới với các surface đích, đóng session cũ trước. Khi session sẵn sàng
+     * và đã có repeating request thì gọi [onReady].
      */
-    fun startRecording(
-        surface: Surface,
-        fpsRange: Range<Int>?,
-        nrMode: Int,
-        ois: Boolean,
-        antibandingMode: Int?,
+    fun startSession(
+        targets: List<Surface>,
+        template: Int,
+        configure: (CaptureRequest.Builder) -> Unit,
         onReady: () -> Unit,
     ) {
         val dev = device ?: error("Camera chưa mở")
+        closeSession()
+        this.targets = targets
+        this.template = template
+        this.configure = configure
         val sessionConfig = SessionConfiguration(
             SessionConfiguration.SESSION_REGULAR,
-            listOf(OutputConfiguration(surface)),
+            targets.map { OutputConfiguration(it) },
             exec,
             object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(s: CameraCaptureSession) {
                     session = s
                     try {
-                        s.setRepeatingRequest(
-                            buildRequest(dev, surface, fpsRange, nrMode, ois, antibandingMode),
-                            null,
-                            handler,
-                        )
+                        s.setRepeatingRequest(buildRequest(dev, configure, triggerAf = false), frameCallback, handler)
                     } catch (e: CameraAccessException) {
                         onFailure?.invoke("Không gửi được yêu cầu quay (${e.reason})")
                         return
@@ -91,37 +121,65 @@ class CameraController(
         dev.createCaptureSession(sessionConfig)
     }
 
+    /** Cập nhật repeating request của session hiện tại (đổi EV, chế độ lấy nét…). */
+    fun updateRequest(configure: (CaptureRequest.Builder) -> Unit) {
+        this.configure = configure
+        val dev = device ?: return
+        val s = session ?: return
+        try {
+            s.setRepeatingRequest(buildRequest(dev, configure, triggerAf = false), frameCallback, handler)
+        } catch (e: CameraAccessException) {
+            onFailure?.invoke("Không cập nhật được camera (${e.reason})")
+        }
+    }
+
+    /** Gửi một lần kích hoạt AF. Các thiết lập lấy nét đọc từ [configure]. */
+    fun triggerAf(configure: (CaptureRequest.Builder) -> Unit) {
+        val dev = device ?: return
+        val s = session ?: return
+        try {
+            s.capture(buildRequest(dev, configure, triggerAf = true), null, handler)
+        } catch (e: CameraAccessException) {
+            onFailure?.invoke("Không kích hoạt được lấy nét (${e.reason})")
+        }
+    }
+
     private fun buildRequest(
         dev: CameraDevice,
-        surface: Surface,
-        fpsRange: Range<Int>?,
-        nrMode: Int,
-        ois: Boolean,
-        antibandingMode: Int?,
-    ): CaptureRequest = dev.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).run {
-        addTarget(surface)
-        set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
-        set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON)
-        set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
-        set(CaptureRequest.NOISE_REDUCTION_MODE, nrMode)
-        set(CaptureRequest.EDGE_MODE, CameraMetadata.EDGE_MODE_FAST)
-        set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
-        if (fpsRange != null) set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fpsRange)
-        if (antibandingMode != null) set(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, antibandingMode)
-        if (ois) {
-            set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON)
-        }
+        configure: (CaptureRequest.Builder) -> Unit,
+        triggerAf: Boolean,
+    ): CaptureRequest = dev.createCaptureRequest(template).run {
+        targets.forEach { addTarget(it) }
+        configure(this)
+        set(
+            CaptureRequest.CONTROL_AF_TRIGGER,
+            if (triggerAf) CameraMetadata.CONTROL_AF_TRIGGER_START else CameraMetadata.CONTROL_AF_TRIGGER_IDLE,
+        )
         build()
     }
 
-    /** Đóng session rồi camera. Không ném lỗi, vì luôn gọi trong đường dọn dẹp. */
-    fun close() {
+    private val frameCallback = object : CameraCaptureSession.CaptureCallback() {
+        override fun onCaptureCompleted(
+            session: CameraCaptureSession,
+            request: CaptureRequest,
+            result: TotalCaptureResult,
+        ) {
+            onFrame?.invoke(result)
+        }
+    }
+
+    private fun closeSession() {
         try {
             session?.close()
         } catch (_: IllegalStateException) {
             // đã đóng
         }
         session = null
+    }
+
+    /** Đóng session rồi camera. Không ném lỗi, vì luôn gọi trong đường dọn dẹp. */
+    fun close() {
+        closeSession()
         device?.close()
         device = null
     }

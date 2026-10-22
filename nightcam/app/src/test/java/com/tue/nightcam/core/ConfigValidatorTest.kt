@@ -24,6 +24,7 @@ class ConfigValidatorTest {
         eisSupported = eis, oisSupported = ois, evRange = -4..4, evStep = 0.33f,
         hevcHardware = hevcHw, hevcMaxBps = hevcMax, avcHardware = avcHw, avcMaxBps = avcMax,
         exposureRangeNs = null, isoRange = null,
+        activeWidth = 4000, activeHeight = 3000,
     )
 
     @Test

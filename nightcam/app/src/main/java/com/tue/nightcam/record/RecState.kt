@@ -10,4 +10,10 @@ data class RecState(
     val fileName: String = "",
     val message: String = "",
     val warnings: List<String> = emptyList(),
+    /** Nhãn lấy nét hiển thị trên UI, ví dụ "Khóa nét ≈ 0,50 m". */
+    val focusText: String = "",
+    /** Nhãn bù sáng, ví dụ "EV −0,7". */
+    val evText: String = "EV 0",
+    /** Máy có lấy nét tay (có minFocusDiopters > 0). */
+    val manualFocus: Boolean = false,
 )

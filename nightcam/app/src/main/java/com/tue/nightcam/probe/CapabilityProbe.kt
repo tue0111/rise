@@ -34,6 +34,7 @@ object CapabilityProbe {
         val ev = ch.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
         val exp = ch.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
         val iso = ch.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+        val active = ch.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
         val hevc = encoder("video/hevc")
         val avc = encoder("video/avc")
 
@@ -66,6 +67,8 @@ object CapabilityProbe {
             avcMaxBps = avc.second,
             exposureRangeNs = exp?.let { it.lower..it.upper },
             isoRange = iso?.let { it.lower..it.upper },
+            activeWidth = active?.width() ?: 0,
+            activeHeight = active?.height() ?: 0,
         )
     }
 

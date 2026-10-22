@@ -59,7 +59,8 @@ Ghi chú: 5 test cho đặt tên và phân loại phục hồi; xoay đoạn qua
   Quay 3 phút rồi vuốt kill app trong Recent Apps (service vẫn chạy thì dùng Force stop trong Settings),
   mở lại app thì các file đã xong vẫn phát được.
 
-## [ ] T5: Preview + lấy nét/phơi sáng
+## [x] T5: Preview + lấy nét/phơi sáng
+Ghi chú: preview mở khi Activity hiện, trả camera khi ẩn. Chạm lấy nét khóa theo khoảng cách sau 3 s hoặc khi AF khóa. EV ±. Chưa kiểm chứng trên máy: chiều xoay preview (PreviewTransform.rotationFor) và tọa độ chạm.
 - TextureView tỷ lệ 9:16, `attachPreview/detachPreview` qua binder (CAMERA2_NOTES mục 0 và 4).
 - Chạm vào preview để lấy nét/đo sáng tại điểm đó rồi khóa khoảng cách nét (mục 6), có vòng tròn chỉ vị trí.
   Có nút Tự động / ∞ / thanh trượt thủ công.

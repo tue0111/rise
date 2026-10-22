@@ -9,9 +9,12 @@ import android.app.Service.STOP_FOREGROUND_REMOVE
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CameraMetadata
 import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.CaptureResult
+import android.hardware.camera2.params.MeteringRectangle
 import android.media.MediaRecorder
 import android.os.Binder
 import android.os.Handler
@@ -20,6 +23,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import android.util.Range
+import android.view.Surface
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.lifecycle.LifecycleService
@@ -27,6 +31,8 @@ import com.tue.nightcam.R
 import com.tue.nightcam.core.Calc
 import com.tue.nightcam.core.ConfigValidator
 import com.tue.nightcam.core.DeviceCaps
+import com.tue.nightcam.core.FocusMode
+import com.tue.nightcam.core.FocusRules
 import com.tue.nightcam.core.FpsRangePicker
 import com.tue.nightcam.core.RecordingConfig
 import com.tue.nightcam.probe.CapabilityProbe
@@ -38,8 +44,9 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Chủ sở hữu duy nhất của camera và recorder trong một phiên quay (docs/PLAN.md mục 4).
- * Activity chỉ điều khiển và hiển thị. Đóng Activity hay tắt màn hình không dừng phiên.
+ * Chủ sở hữu duy nhất của camera và recorder (docs/PLAN.md mục 4).
+ * Activity chỉ điều khiển và hiển thị. Camera có thể mở để xem trước khi chưa quay;
+ * đóng Activity hay tắt màn hình không dừng phiên quay đang chạy.
  * Mọi thao tác camera và recorder chạy trên thread nc-camera.
  */
 class RecordingService : LifecycleService() {
@@ -48,15 +55,11 @@ class RecordingService : LifecycleService() {
         val service: RecordingService get() = this@RecordingService
     }
 
-    /** Thiết lập cố định cho cả phiên, tính một lần khi bắt đầu. */
+    /** Thiết lập cố định của một phiên quay, tính khi bắt đầu. */
     private class Plan(
         val cfg: RecordingConfig,
         val cameraId: String,
         val hint: Int,
-        val fps: Range<Int>?,
-        val nrMode: Int,
-        val ois: Boolean,
-        val antibanding: Int?,
         val stamp: String,
         val warnings: List<String>,
     )
@@ -74,6 +77,12 @@ class RecordingService : LifecycleService() {
     private lateinit var segments: SegmentStore
 
     // Các biến dưới đây chỉ đọc và ghi trên thread nc-camera.
+    private var caps: DeviceCaps? = null
+    private var liveCfg = RecordingConfig()
+    private var previewSurface: Surface? = null
+    private var focus: FocusMode = FocusMode.Continuous
+    private var evIndex = 0
+
     private var plan: Plan? = null
     private var sessionActive = false
     private var sessionStartedMs = 0L
@@ -99,6 +108,7 @@ class RecordingService : LifecycleService() {
         camHandler = Handler(camThread.looper)
         camera = CameraController(getSystemService(CameraManager::class.java), camHandler).apply {
             onFailure = { msg -> finishSession(msg, error = true) }
+            onFrame = { result -> onFrame(result) }
         }
         recorder = RecorderController(applicationContext)
         segments = SegmentStore(contentResolver)
@@ -118,6 +128,61 @@ class RecordingService : LifecycleService() {
         return START_NOT_STICKY
     }
 
+    // ---- API cho Activity (gọi từ main thread, việc thật chạy trên nc-camera) ----
+
+    fun attachPreview(surface: Surface) = camHandler.post {
+        previewSurface = surface
+        if (!sessionActive) openPreview()
+    }
+
+    fun detachPreview() = camHandler.post {
+        previewSurface = null
+        if (!sessionActive) camera.close()
+    }
+
+    /** Chạm để lấy nét tại (nx, ny) trong khung preview dọc, giá trị 0..1. */
+    fun tapFocus(nx: Float, ny: Float) = camHandler.post {
+        val c = caps ?: return@post
+        if (!camera.isOpen) return@post
+        val (sx, sy) = Calc.touchToSensor(nx, ny, c.sensorOrientation)
+        val box = FocusRules.tapBox(sx, sy, c.activeWidth, c.activeHeight)
+        focus = FocusMode.Tap(box, System.currentTimeMillis() + FocusRules.TAP_TIMEOUT_MS)
+        camera.updateRequest(::configure)
+        camera.triggerAf(::configure)
+        publishControls()
+    }
+
+    fun setAutoFocus() = camHandler.post {
+        focus = FocusMode.Continuous
+        camera.updateRequest(::configure)
+        publishControls()
+    }
+
+    /** Khóa khoảng cách nét bằng diopter. 0 là vô cực. */
+    fun setFixedFocus(diopters: Float) = camHandler.post {
+        focus = FocusMode.Locked(diopters)
+        camera.updateRequest(::configure)
+        publishControls()
+    }
+
+    fun adjustEv(delta: Int) = camHandler.post {
+        val range = caps?.evRange ?: return@post
+        evIndex = (evIndex + delta).coerceIn(range)
+        camera.updateRequest(::configure)
+        publishControls()
+    }
+
+    /** Lấy nét tay theo tỷ lệ 0..1 trên thang từ vô cực tới khoảng cách gần nhất của máy. */
+    fun setFocusFraction(fraction: Float) = camHandler.post {
+        val c = caps ?: return@post
+        if (c.minFocusDiopters <= 0f) return@post
+        focus = FocusMode.Locked(fraction.coerceIn(0f, 1f) * c.minFocusDiopters)
+        camera.updateRequest(::configure)
+        publishControls()
+    }
+
+    // ---- Vòng đời phiên quay ----
+
     private fun startSession(rotationDeg: Int) {
         val requested = ConfigStore(this).load()
         audioEnabled = requested.audio && hasPermission(Manifest.permission.RECORD_AUDIO)
@@ -134,25 +199,13 @@ class RecordingService : LifecycleService() {
 
     private fun beginRecording(requested: RecordingConfig, rotationDeg: Int) {
         try {
-            val caps = CapabilityProbe.probe(this) ?: return failWith("Không tìm thấy camera sau.")
-            val result = ConfigValidator.validate(
-                if (audioEnabled) requested else requested.copy(audio = false),
-                caps,
-            )
-            val cfg = result.config
+            val result = validateAndProbe(if (audioEnabled) requested else requested.copy(audio = false))
+                ?: return failWith("Không tìm thấy camera sau.")
+            val c = caps ?: return failWith("Không tìm thấy camera sau.")
             plan = Plan(
-                cfg = cfg,
-                cameraId = caps.cameraId,
-                hint = Calc.orientationFor(cfg.orientationId, caps.sensorOrientation, rotationDeg),
-                fps = FpsRangePicker.pick(caps.fpsRanges, cfg.profileId, cfg.minFpsFloor)
-                    ?.let { Range(it.first, it.last) },
-                nrMode = if (cfg.nrId == RecordingConfig.NR_HQ) {
-                    CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY
-                } else {
-                    CaptureRequest.NOISE_REDUCTION_MODE_FAST
-                },
-                ois = cfg.ois && caps.oisSupported,
-                antibanding = antibandingFor(caps),
+                cfg = result.config,
+                cameraId = c.cameraId,
+                hint = Calc.orientationFor(result.config.orientationId, c.sensorOrientation, rotationDeg),
                 stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()),
                 warnings = result.warnings,
             )
@@ -168,7 +221,7 @@ class RecordingService : LifecycleService() {
         }
     }
 
-    /** Mở một đoạn mới: tạo file, chuẩn bị recorder, mở camera rồi bắt đầu ghi. Chạy trên nc-camera. */
+    /** Mở một đoạn mới rồi bắt đầu ghi. Chạy trên nc-camera. */
     private fun startSegment() {
         val p = plan ?: return
         if (!sessionActive) return
@@ -183,26 +236,30 @@ class RecordingService : LifecycleService() {
                 onInfo = { what -> onRecorderInfo(what) },
                 onError = { what -> failWith("Lỗi recorder (mã $what)") },
             )
-            camera.open(p.cameraId) {
-                // Người dùng đã dừng trong lúc camera đang mở: đóng camera ngay.
-                if (!sessionActive) {
-                    camera.close()
-                    return@open
-                }
-                try {
-                    camera.startRecording(
-                        surface = surface,
-                        fpsRange = p.fps,
-                        nrMode = p.nrMode,
-                        ois = p.ois,
-                        antibandingMode = p.antibanding,
-                    ) {
-                        onSegmentStarted(segment)
+            if (camera.isOpen) {
+                beginSessionOn(surface, segment)
+            } else {
+                camera.open(p.cameraId) {
+                    // Người dùng đã dừng trong lúc camera đang mở: đóng camera ngay.
+                    if (!sessionActive) {
+                        camera.close()
+                        return@open
                     }
-                } catch (e: Exception) {
-                    failWith("Không bắt đầu được: ${e.message}")
+                    beginSessionOn(surface, segment)
                 }
             }
+        } catch (e: Exception) {
+            failWith("Không bắt đầu được: ${e.message}")
+        }
+    }
+
+    private fun beginSessionOn(surface: Surface, segment: SegmentStore.Segment) {
+        try {
+            camera.startSession(
+                targets = listOf(surface),
+                template = CameraDevice.TEMPLATE_RECORD,
+                configure = ::configure,
+            ) { onSegmentStarted(segment) }
         } catch (e: Exception) {
             failWith("Không bắt đầu được: ${e.message}")
         }
@@ -216,12 +273,13 @@ class RecordingService : LifecycleService() {
             failWith("Recorder không chạy: ${e.message}")
             return
         }
-        _state.value = RecState(
+        _state.value = _state.value.copy(
             status = RecStatus.RECORDING,
             startedAtMs = sessionStartedMs,
             segmentIndex = segmentIndex,
             fileName = segment.name,
             warnings = plan?.warnings.orEmpty() + gaps,
+            message = "",
         )
         mainHandler.removeCallbacks(notifyTicker)
         mainHandler.post(notifyTicker)
@@ -287,8 +345,9 @@ class RecordingService : LifecycleService() {
     private fun failWith(message: String) = finishSession(message, error = true)
 
     /**
-     * Kết thúc phiên. Gọi được từ mọi thread. Việc dọn dẹp chạy trên nc-camera:
+     * Kết thúc phiên. Gọi được từ mọi thread. Dọn dẹp chạy trên nc-camera:
      * dừng recorder → đóng camera → hoàn tất file → nhả wake lock → dừng service.
+     * Sau khi dừng bình thường, nếu Activity vẫn hiện thì mở lại preview.
      */
     private fun finishSession(reason: String, error: Boolean = false) {
         camHandler.post {
@@ -308,15 +367,150 @@ class RecordingService : LifecycleService() {
                 releaseWakeLock()
                 if (!stopped) message = "$reason (đoạn cuối có thể không đọc được)"
             }
-            _state.value = RecState(
+            _state.value = _state.value.copy(
                 status = if (error) RecStatus.ERROR else RecStatus.IDLE,
                 message = message,
+                startedAtMs = 0L,
+                fileName = "",
+                warnings = emptyList(),
             )
+            publishControls()
             mainHandler.removeCallbacks(notifyTicker)
+            if (!error && previewSurface != null) openPreview()
             mainHandler.post {
                 ServiceCompat.stopForeground(this, STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
+        }
+    }
+
+    // ---- Xem trước và cấu hình request ----
+
+    private fun openPreview() {
+        if (previewSurface == null) return
+        val requested = ConfigStore(this).load().copy(audio = false)
+        val result = validateAndProbe(requested)
+        if (result == null) {
+            _state.value = _state.value.copy(message = "Không tìm thấy camera sau.")
+            return
+        }
+        val cameraId = caps?.cameraId ?: return
+        camera.open(cameraId) {
+            val surface = previewSurface
+            if (surface == null) {
+                camera.close()
+                return@open
+            }
+            // Đang quay thì phiên quay tự tạo session của nó.
+            if (sessionActive) return@open
+            camera.startSession(
+                targets = listOf(surface),
+                template = CameraDevice.TEMPLATE_PREVIEW,
+                configure = ::configure,
+            ) {}
+        }
+    }
+
+    /** Đưa nhãn lấy nét và EV ra trạng thái để UI hiển thị. Chạy trên nc-camera. */
+    private fun publishControls() {
+        val c = caps
+        val evText = if (c == null) {
+            "EV 0"
+        } else {
+            "EV %+.1f".format(evIndex * c.evStep).replace('-', '−')
+        }
+        _state.value = _state.value.copy(
+            focusText = focusLabel(c),
+            evText = evText,
+            manualFocus = c != null && c.minFocusDiopters > 0f,
+        )
+    }
+
+    private fun focusLabel(c: DeviceCaps?): String = when (val f = focus) {
+        FocusMode.Continuous -> "Lấy nét: tự động"
+        is FocusMode.Tap -> "Đang lấy nét…"
+        is FocusMode.Locked -> when {
+            f.diopters <= 0f -> "Khóa nét: vô cực"
+            c != null && c.focusCalibrated -> "Khóa nét ≈ %.2f m".format(1f / f.diopters)
+            else -> "Đã khóa nét"
+        }
+    }
+
+    /** Chạy trên nc-camera. Đọc khả năng máy và cấu hình đã kiểm tra. */
+    private fun validateAndProbe(requested: RecordingConfig): ConfigValidator.Result? {
+        val c = CapabilityProbe.probe(this) ?: return null
+        caps = c
+        val result = ConfigValidator.validate(requested, c)
+        liveCfg = result.config
+        publishControls()
+        return result
+    }
+
+    /** Dựng request. Mọi thiết lập camera đi qua đây (xem CAMERA2_NOTES mục 5). */
+    private fun configure(b: CaptureRequest.Builder) {
+        val c = caps ?: return
+        val cfg = liveCfg
+        FpsRangePicker.pick(c.fpsRanges, cfg.profileId, cfg.minFpsFloor)
+            ?.let { b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(it.first, it.last)) }
+        b.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
+        b.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON)
+        b.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, evIndex)
+        b.set(
+            CaptureRequest.NOISE_REDUCTION_MODE,
+            if (cfg.nrId == RecordingConfig.NR_HQ) {
+                CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY
+            } else {
+                CaptureRequest.NOISE_REDUCTION_MODE_FAST
+            },
+        )
+        b.set(CaptureRequest.EDGE_MODE, CameraMetadata.EDGE_MODE_FAST)
+        b.set(
+            CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+            if (cfg.eis && c.eisSupported) {
+                CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_ON
+            } else {
+                CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_OFF
+            },
+        )
+        if (cfg.ois && c.oisSupported) {
+            b.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON)
+        }
+        antibandingFor(c)?.let { b.set(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, it) }
+
+        when (val f = focus) {
+            FocusMode.Continuous -> b.set(
+                CaptureRequest.CONTROL_AF_MODE,
+                CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_VIDEO,
+            )
+            is FocusMode.Tap -> {
+                b.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_AUTO)
+                val region = MeteringRectangle(f.box.left, f.box.top, f.box.width, f.box.height, MeteringRectangle.METERING_WEIGHT_MAX)
+                b.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(region))
+                b.set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(region))
+            }
+            is FocusMode.Locked -> {
+                b.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF)
+                b.set(CaptureRequest.LENS_FOCUS_DISTANCE, f.diopters)
+            }
+        }
+    }
+
+    /** Kết quả từng frame, dùng để khóa nét sau khi chạm. Chạy trên nc-camera. */
+    private fun onFrame(result: CaptureResult) {
+        val current = focus as? FocusMode.Tap ?: return
+        val afState = result.get(CaptureResult.CONTROL_AF_STATE)
+        val locked = afState == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED ||
+            afState == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED
+        val next = FocusRules.afterFrame(
+            current,
+            locked,
+            result.get(CaptureResult.LENS_FOCUS_DISTANCE),
+            System.currentTimeMillis(),
+        )
+        if (next !== current) {
+            focus = next
+            camera.updateRequest(::configure)
+            publishControls()
         }
     }
 
@@ -327,6 +521,8 @@ class RecordingService : LifecycleService() {
             CameraMetadata.CONTROL_AE_ANTIBANDING_MODE_AUTO
         else -> null
     }
+
+    // ---- Thông báo và tài nguyên ----
 
     private fun goForeground() {
         ensureChannel()

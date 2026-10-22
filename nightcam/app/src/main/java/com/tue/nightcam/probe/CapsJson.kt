@@ -28,4 +28,5 @@ fun DeviceCaps.toJson(): JSONObject = JSONObject().apply {
     put("avc_max_bps", avcMaxBps ?: JSONObject.NULL)
     put("exposure_ns", exposureRangeNs?.let { "${it.first}..${it.last}" } ?: JSONObject.NULL)
     put("iso", isoRange?.let { "${it.first}..${it.last}" } ?: JSONObject.NULL)
+    put("active_array", "${activeWidth}x${activeHeight}")
 }
