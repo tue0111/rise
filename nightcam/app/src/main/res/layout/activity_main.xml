@@ -6,12 +6,17 @@
     android:orientation="vertical"
     android:padding="24dp">
 
-    <!-- Placeholder của scaffold. Task T3 trong docs/TASKS.md thay bằng giao diện thật. -->
     <TextView
         android:id="@+id/status"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="NightCam scaffold"
         android:textColor="#FFFFFFFF"
         android:textSize="18sp" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnInfo"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:text="Thông tin máy" />
 </LinearLayout>

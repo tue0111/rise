@@ -30,7 +30,8 @@ Tạo `app/src/main/java/com/tue/nightcam/core/`, **không import `android.*`**:
 - Thêm `testImplementation("junit:junit:4.13.2")`. Unit test cho mọi hàm trên, gồm các ca biên:
   danh sách FPS rỗng hoặc không có dải upper=30, sensor 0/90/180/270, dung lượng trống nhỏ hơn reserve.
 
-## [ ] T2: CapabilityProbe + màn "Thông tin máy"
+## [x] T2: CapabilityProbe + màn "Thông tin máy"
+Ghi chú: ConfigValidator có 7 test; hộp thoại Thông tin máy build được. Chưa chạy trên Pixel thật.
 - `probe/CapabilityProbe.kt` đọc mọi thứ ở CAMERA2_NOTES mục 1, trả về `DeviceCaps` (data class) + `toJson()`
   (dùng `org.json.JSONObject`).
 - `RecordingConfig.validate(caps)`: tổ hợp không hỗ trợ thì trả về config đã sửa kèm danh sách cảnh báo,
