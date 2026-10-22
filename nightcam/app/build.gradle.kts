@@ -12,8 +12,8 @@ android {
         // Pixel 3 XL dừng ở Android 12 (API 31). Không được nâng minSdk quá 31.
         minSdk = 29
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.9.0"
+        versionCode = 3
+        versionName = "0.9.1"
     }
 
     signingConfigs {

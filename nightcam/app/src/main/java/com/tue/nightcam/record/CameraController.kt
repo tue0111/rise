@@ -54,6 +54,15 @@ class CameraController(
         openWaiters += onOpened
         if (opening) return
         opening = true
+        try {
+            openCameraDevice(cameraId)
+        } catch (e: Exception) {
+            // Thiếu quyền camera, camera bị app khác giữ, hoặc camera bị tắt trong Quick Settings.
+            failOpen("Không mở được camera: ${e.message}")
+        }
+    }
+
+    private fun openCameraDevice(cameraId: String) {
         cameraManager.openCamera(cameraId, exec, object : CameraDevice.StateCallback() {
             override fun onOpened(camera: CameraDevice) {
                 device = camera

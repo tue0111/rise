@@ -76,9 +76,20 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Xin quyền lúc mở app: có quyền thì mở preview ngay. */
+    private val startupPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+            if (cameraGranted()) {
+                attachPreviewIfReady()
+            } else {
+                binding.status.text = "Cần quyền camera để xem trước và quay."
+            }
+        }
+
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
             if (cameraGranted()) {
+                attachPreviewIfReady()
                 startRecording()
             } else {
                 binding.status.text = "Cần quyền camera để quay."
@@ -136,7 +147,11 @@ class MainActivity : AppCompatActivity() {
         }
         binding.previewView.surfaceTextureListener = previewListener
         render(RecState())
-        if (savedInstanceState == null) recoverLeftovers()
+        if (savedInstanceState == null) {
+            recoverLeftovers()
+            val missing = requiredPermissions().filter { !isGranted(it) }
+            if (missing.isNotEmpty()) startupPermissionLauncher.launch(missing.toTypedArray())
+        }
     }
 
     private val previewListener = object : TextureView.SurfaceTextureListener {
@@ -275,6 +290,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun attachPreviewIfReady() {
+        if (!cameraGranted()) return
         val svc = service ?: return
         val surface = previewSurface ?: return
         svc.attachPreview(surface)

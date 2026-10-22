@@ -534,6 +534,7 @@ class RecordingService : LifecycleService() {
 
     private fun openPreview() {
         if (previewSurface == null) return
+        if (!hasPermission(Manifest.permission.CAMERA)) return
         val requested = ConfigStore(this).load().copy(audio = false)
         val result = validateAndProbe(requested)
         if (result == null) {
