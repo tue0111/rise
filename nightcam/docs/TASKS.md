@@ -38,7 +38,8 @@ Ghi chú: ConfigValidator có 7 test; hộp thoại Thông tin máy build đư�
   ví dụ "Không có HEVC phần cứng, chuyển H.264 20 Mbps".
 - Nút "Thông tin máy" trong UI: hiện JSON (TextView có cuộn, chữ monospace) và nút Sao chép.
 
-## [ ] T3: MVP quay nền (bản đầu tiên dùng được thật)
+## [x] T3: MVP quay nền (bản đầu tiên dùng được thật)
+Ghi chú: đã build, không có test tự động cho phần camera. Chưa chạy trên Pixel; kiểm tra máy còn chờ người dùng. Đã sửa: bấm Dừng khi camera đang mở thì đóng camera ngay; không để camera mở sau khi dừng.
 - `RecordingService` (LifecycleService + `LocalBinder` + `StateFlow<RecState>`), có `HandlerThread("nc-camera")`.
 - `CameraController` + `RecorderController`: một file duy nhất, chưa chia segment,
   session **chỉ có surface recorder** (CAMERA2_NOTES mục 2, 4, 5), dùng giá trị từ config/preset.

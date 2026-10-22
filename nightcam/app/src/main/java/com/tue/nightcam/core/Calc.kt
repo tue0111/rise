@@ -29,6 +29,27 @@ object Calc {
     fun orientationHint(sensorOrientation: Int, displayRotationDeg: Int): Int =
         mod360(sensorOrientation - displayRotationDeg)
 
+    /**
+     * Hướng xoay theo chế độ người dùng chọn (RecordingConfig.orientationId).
+     * Auto theo màn hình; Ngang/Dọc ép về hướng gần nhất với màn hình hiện tại.
+     */
+    fun orientationFor(mode: String, sensorOrientation: Int, displayRotationDeg: Int): Int {
+        val rot = roundToRightAngle(displayRotationDeg)
+        return when (mode) {
+            RecordingConfig.ORIENTATION_LANDSCAPE ->
+                orientationHint(sensorOrientation, if (rot == 90 || rot == 270) rot else 90)
+            RecordingConfig.ORIENTATION_PORTRAIT ->
+                orientationHint(sensorOrientation, if (rot == 0 || rot == 180) rot else 0)
+            else -> orientationHint(sensorOrientation, rot)
+        }
+    }
+
+    /** Thời lượng dạng HH:MM:SS. */
+    fun formatDuration(ms: Long): String {
+        val s = (ms / 1000).coerceAtLeast(0)
+        return "%02d:%02d:%02d".format(s / 3600, s % 3600 / 60, s % 60)
+    }
+
     /** Làm tròn góc bất kỳ về 0 / 90 / 180 / 270. */
     fun roundToRightAngle(deg: Int): Int = (mod360(deg) + 45) / 90 % 4 * 90
 

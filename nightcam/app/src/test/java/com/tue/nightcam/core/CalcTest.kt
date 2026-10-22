@@ -91,4 +91,23 @@ class CalcTest {
         assertEquals(20, Calc.avcFallbackMbps(14))
         assertTrue(Calc.avcFallbackMbps(10) > 10)
     }
+
+    @Test
+    fun orientationFor_autoFollowsDisplay() {
+        assertEquals(90, Calc.orientationFor("auto", 90, 0))
+        assertEquals(0, Calc.orientationFor("auto", 90, 90))
+    }
+
+    @Test
+    fun orientationFor_landscapeAndPortraitAreForced() {
+        assertEquals(0, Calc.orientationFor("landscape", 90, 0))      // đang dọc → ép ngang natural
+        assertEquals(180, Calc.orientationFor("landscape", 90, 270))  // đang ngang → giữ chiều
+        assertEquals(90, Calc.orientationFor("portrait", 90, 90))     // đang ngang → ép dọc
+    }
+
+    @Test
+    fun formatDuration_hhmmss() {
+        assertEquals("00:00:00", Calc.formatDuration(-5))
+        assertEquals("01:02:03", Calc.formatDuration(3_723_000))
+    }
 }

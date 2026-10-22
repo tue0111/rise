@@ -230,12 +230,13 @@ vào SessionLog rồi hiện trên màn hình đang quay. Giữ callback thật 
 ## 8. Orientation hint
 
 ```kotlin
-// deviceDeg lấy từ OrientationEventListener lúc bấm Quay, làm tròn về 0/90/180/270
-fun orientationHint(sensorOrientation: Int, deviceDeg: Int): Int =   // camera sau
-    (sensorOrientation + deviceDeg) % 360
+// displayRotationDeg = windowManager.defaultDisplay.rotation * 90 (0, 90, 180, 270)
+fun orientationHint(sensorOrientation: Int, displayRotationDeg: Int): Int =   // camera sau
+    ((sensorOrientation - displayRotationDeg) % 360 + 360) % 360
 ```
 
-Cầm dọc thì `deviceDeg = 0`, hint 90, ra video dọc. Xoay ngang thì video ngang.
+Cầm dọc (rotation 0) thì hint 90, ra video dọc. Xoay ngang thì video ngang.
+(Bản đầu của tài liệu này ghi công thức cộng; đã sửa thành trừ theo công thức chuẩn của Camera2. Code trong `core/Calc.kt` là nguồn đúng.)
 Có tùy chọn ép "Luôn ngang" / "Luôn dọc".
 
 ## 9. MediaStore cho segment
