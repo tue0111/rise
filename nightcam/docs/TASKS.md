@@ -14,7 +14,8 @@ Mỗi task chỉ được coi là xong khi `./gradlew assembleDebug testDebugUni
 Gradle 8.14.3, AGP 8.7.3, Kotlin 2.0.21, compileSdk 35, minSdk 29, key ký cố định,
 workflow CI `.github/workflows/nightcam-apk.yml`. Đã build thử: APK debug cài được, không có INTERNET.
 
-## [ ] T1: Lớp `core/` thuần Kotlin + unit test
+## [x] T1: Lớp `core/` thuần Kotlin + unit test
+Ghi chú: 24 unit test (RecordingConfig, Calc, FpsRangePicker) chạy xanh.
 Tạo `app/src/main/java/com/tue/nightcam/core/`, **không import `android.*`**:
 - `RecordingConfig` (data class): `resolutionId` ("2160p"|"1080p"|"720p"), `codecId` ("hevc"|"avc"),
   `videoMbps`, `profileId` ("night"|"standard"), `minFpsFloor`, `audio`, `segmentMinutes`, `reserveGb`,
