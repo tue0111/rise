@@ -10,13 +10,24 @@ import java.io.FileDescriptor
 /**
  * Bọc MediaRecorder. Thứ tự gọi bắt buộc theo CAMERA2_NOTES mục 2:
  * audio source → video source → output format → output file → encoder → bitrate → size → prepare → lấy surface.
+ * Sự kiện (802, 803, 801) được chuyển cho [onInfo]. Các callback này chạy trên thread đã tạo recorder.
  */
 class RecorderController(private val appContext: Context) {
 
     private var recorder: MediaRecorder? = null
 
-    /** Chuẩn bị recorder và trả về surface để gắn vào camera session. */
-    fun prepare(config: RecordingConfig, output: FileDescriptor, orientationHint: Int): Surface {
+    /**
+     * Chuẩn bị recorder và trả về surface để gắn vào camera session.
+     * [maxBytes] là giới hạn đoạn để MediaRecorder báo khi sắp đầy.
+     */
+    fun prepare(
+        config: RecordingConfig,
+        output: FileDescriptor,
+        orientationHint: Int,
+        maxBytes: Long,
+        onInfo: (what: Int) -> Unit,
+        onError: (what: Int) -> Unit,
+    ): Surface {
         val r = if (Build.VERSION.SDK_INT >= 31) {
             MediaRecorder(appContext)
         } else {
@@ -30,6 +41,7 @@ class RecorderController(private val appContext: Context) {
             r.setVideoSource(MediaRecorder.VideoSource.SURFACE)
             r.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
             r.setOutputFile(output)
+            r.setMaxFileSize(maxBytes)
             r.setVideoEncoder(
                 if (config.isHevc) MediaRecorder.VideoEncoder.HEVC else MediaRecorder.VideoEncoder.H264,
             )
@@ -43,6 +55,8 @@ class RecorderController(private val appContext: Context) {
                 r.setAudioSamplingRate(48_000)
                 r.setAudioChannels(1)
             }
+            r.setOnInfoListener { _, what, _ -> onInfo(what) }
+            r.setOnErrorListener { _, what, _ -> onError(what) }
             r.prepare()
         } catch (e: Exception) {
             r.release()
@@ -50,6 +64,11 @@ class RecorderController(private val appContext: Context) {
         }
         recorder = r
         return r.surface
+    }
+
+    /** Đặt file kế tiếp, dùng khi MediaRecorder báo sắp đầy đoạn (API 26+). */
+    fun setNextOutput(output: FileDescriptor) {
+        recorder?.setNextOutputFile(output) ?: error("Recorder chưa được chuẩn bị")
     }
 
     fun start() {

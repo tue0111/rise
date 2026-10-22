@@ -50,7 +50,8 @@ Ghi chú: đã build, không có test tự động cho phần camera. Chưa ch�
 - **Kiểm tra máy:** quay 10 phút, bấm nút nguồn tắt màn hình ngay sau khi bấm Quay.
   File trong Photos/Files ở `Movies/NightCam` phải phát được đủ 10 phút và có tiếng.
 
-## [ ] T4: Chia segment + phục hồi sau crash
+## [x] T4: Chia segment + phục hồi sau crash
+Ghi chú: 5 test cho đặt tên và phân loại phục hồi; xoay đoạn qua 802/803, đường dự phòng 801 mở lại camera. Chưa kiểm tra trên máy.
 - Xoay segment bằng `setMaxFileSize`/`setNextOutputFile` (CAMERA2_NOTES mục 3), xử lý cả nhánh 801.
 - Tên file `NC_yyyyMMdd_HHmmss_partNNN.mp4`, cùng `stamp` cho cả phiên.
 - `SegmentStore.recover()` chạy lúc app mở (khi không có phiên quay), kết quả báo bằng một Snackbar.

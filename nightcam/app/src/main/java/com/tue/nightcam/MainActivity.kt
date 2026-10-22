@@ -20,6 +20,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.snackbar.Snackbar
 import com.tue.nightcam.core.Calc
 import com.tue.nightcam.core.ConfigValidator
 import com.tue.nightcam.core.Presets
@@ -27,6 +28,7 @@ import com.tue.nightcam.databinding.ActivityMainBinding
 import com.tue.nightcam.probe.CapabilityProbe
 import com.tue.nightcam.probe.toJson
 import com.tue.nightcam.record.RecState
+import com.tue.nightcam.record.SegmentStore
 import com.tue.nightcam.record.RecStatus
 import com.tue.nightcam.record.RecordingService
 import kotlinx.coroutines.Dispatchers
@@ -85,6 +87,21 @@ class MainActivity : AppCompatActivity() {
         binding.btnRecord.setOnClickListener { onRecordClicked() }
         binding.btnInfo.setOnClickListener { showDeviceInfo() }
         render(RecState())
+        if (savedInstanceState == null) recoverLeftovers()
+    }
+
+    /** Phục hồi file dở dang của lần chạy trước (app bị chết giữa chừng). */
+    private fun recoverLeftovers() {
+        lifecycleScope.launch {
+            val r = withContext(Dispatchers.IO) { SegmentStore(contentResolver).recoverPending() }
+            if (r.total > 0) {
+                Snackbar.make(
+                    binding.root,
+                    "Phục hồi: ${r.published} đoạn giữ lại, ${r.broken} đoạn lỗi, ${r.removed} đoạn rỗng đã xóa.",
+                    Snackbar.LENGTH_LONG,
+                ).show()
+            }
+        }
     }
 
     override fun onStart() {
